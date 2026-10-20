@@ -2,17 +2,17 @@ rm(list = ls())
 pacman::p_load(pacman, haven, tidyr, ggplot2, survival, pseudo, readr, matrixStats,dplyr)
 devtools::reload(pkgload::inst("dplyr"))
 #### Load Data ####
-setwd("~/University of Michigan Dropbox/Abby Loe/A. Loe-Project 2/CareQoL")
+setwd("~/Library/CloudStorage/Dropbox-UniversityofMichigan/Abby Loe/A. Loe-Project 2/CareQoL")
 source("adler_rf.R")
 source("careQoL_useful_fxns.R")
-load("~/University of Michigan Dropbox/Abby Loe/data/imputed_data_Sadness_t_score.Rdata",
+load("~/Library/CloudStorage/Dropbox-UniversityofMichigan/Abby Loe/data/imputed_data_Sadness_t_score.Rdata",
      verbose = T)
 # this is the sad dataset. 
 sad = impute_list[[1]]$complete_dat
 plot(sad$Sadness_t_score, sad$Sadness_t_score_BL)
 # some EDA
 sad = sad %>% 
-  mutate(Ri = ifelse(Sadness_t_score>=Sadness_t_score_BL +0,
+  mutate(Ri = ifelse(Sadness_t_score>=Sadness_t_score_BL +2,
                      0, 1), # if t-score greater than threshold, sad. Not at risk -> Ri = 0.
          cat_Ri = ifelse(Ri == 0, "Sad", "Happy")) %>% 
   relocate(Ri, .after = Sadness_t_score)
@@ -247,8 +247,6 @@ final.formatted.dat = full.dat %>%
   ungroup() 
 
 
-cl= parallel::makeCluster(7)
-registerDoParallel(cl)
 
 bad.names =  c( "min_T_tau",
                 "next_sad_week",
@@ -262,60 +260,76 @@ bad.names =  c( "min_T_tau",
                 "cas_relationship",
                 "waves", "next_T", "sad_week")
 
-adler.dt = setDT(final.formatted.dat %>%
-                   ungroup() %>% 
-                   dplyr::select(- any_of(bad.names),
-                                 - contains("X"),
-                                 - contains("TScore"),
-                                 -contains("t_score")
-                                 ) %>%
-                   filter(week >0) %>% 
-                   mutate(across(c( contains("Ri_prior"), contains("Ri_post")), ~ifelse(is.na(.), -1, .))) %>% 
-                   as.data.frame())
 
-names(adler.dt)
-table(adler.dt$Ri, adler.dt$week)
 
-split.vars = (c(names(adler.dt %>% dplyr::select(contains("forward.backward"))), 
-               "week"))
-start.time.rf = Sys.time()
-adler.res = calibrated.forest(
-  n.iter = 500,
-  data = adler.dt,
-  chosen.seed = 121110,
-  time.name = "week",
-  cov.mat = adler.dt[, !c("Ri", "ID"), with = FALSE],
-  ID.vec = adler.dt$ID,
-  nsamp = 4,
-  minbuck = 8,
-  always.split = split.vars,
-  loss.function = "class")
-stopCluster(cl)
-end.time.rf = Sys.time()
 
-rf.time =end.time.rf-start.time.rf
+# for(numbucket in c(4, 8, 16, 32)){
+#   for(numsamp in c(4, 6, 8, 10, 12)){
+#     for (numtrees in c(250, 500, 750)){
+for(numbucket in c(4, 8, 16, 32)){
+  for(numsamp in c(5)){
+    for (numtrees in c(250, 500, 750)){      
+      cl= parallel::makeCluster(7)
+      registerDoParallel(cl)
+      adler.dt = setDT(final.formatted.dat %>%
+                         ungroup() %>% 
+                         dplyr::select(- any_of(bad.names),
+                                       - contains("X"),
+                                       - contains("TScore"),
+                                       -contains("t_score")
+                         ) %>%
+                         filter(week >0) %>% 
+                         mutate(across(c( contains("Ri_prior"), contains("Ri_post")), ~ifelse(is.na(.), -1, .))) %>% 
+                         as.data.frame())
+      
+      names(adler.dt)
+      # 30 possible covariates (including the history covs!)
+      table(adler.dt$Ri, adler.dt$week)
+      
+      split.vars = (c(names(adler.dt %>% dplyr::select(contains("forward.backward"))), 
+                      "week"))
+      start.time.rf = Sys.time()
+      adler.res = calibrated.forest(
+        n.iter = numtrees,
+        data = adler.dt,
+        chosen.seed = 121110,
+        time.name = "week",
+        cov.mat = adler.dt[, !c("Ri", "ID"), with = FALSE],
+        ID.vec = adler.dt$ID,
+        nsamp = numsamp,
+        minbuck = numbucket,
+        always.split = split.vars,
+        loss.function = "class")
+      end.time.rf = Sys.time()
+      stopCluster(cl)
+      
+      rf.time =end.time.rf-start.time.rf
+      print(rf.time)
+      adler.res = as.data.frame(adler.res)
+      
+      final.dat = final.formatted.dat %>% 
+        left_join(adler.res, by = c("ID" = "ID", 
+                                    "week" = "continuous_time")) %>% 
+        mutate(avg.rf.pred = ifelse(week == 0, 1, avg.rf.pred))
+      # quantile(1/final.dat$avg.rf.pred[which(final.dat$Ri == 1)])
+      # sum(1/final.dat$avg.rf.pred[which(final.dat$Ri == 1)])
+      # nrow(final.dat)
+      # 
+      # ggplot(final.dat %>% filter(Ri == 1))+
+      #   geom_histogram(aes(x = 1/avg.rf.pred), bins = 50)+
+      #   geom_vline(xintercept = 1)
+      # 
+      # final.dat %>% 
+      #   group_by(group) %>% 
+      #   filter(Ri == 1) %>% 
+      #   summarise(mean(pseudoval,na.rm = T
+      #   ))
+      
+      # dat = read.csv("sad_dat.csv") %>% 
+      # relocate(Sadness_t_score_BL, .after = Sadness_t_score)
+      
+      write.csv(final.dat, file = paste0("RF_Tuning/sad_dat_thresh2_numbucket", numbucket, "_numsamp", numsamp, "_numtrees", numtrees, ".csv"))
+    }
+  }
+}
 
-adler.res = as.data.frame(adler.res)
-
-final.dat = final.formatted.dat %>% 
-  left_join(adler.res, by = c("ID" = "ID", 
-                              "week" = "continuous_time")) %>% 
-  mutate(avg.rf.pred = ifelse(week == 0, 1, avg.rf.pred))
-quantile(1/final.dat$avg.rf.pred[which(final.dat$Ri == 1)])
-sum(1/final.dat$avg.rf.pred[which(final.dat$Ri == 1)])
-nrow(final.dat)
-
-ggplot(final.dat %>% filter(Ri == 1))+
-  geom_histogram(aes(x = 1/avg.rf.pred), bins = 50)+
-  geom_vline(xintercept = 1)
-
-final.dat %>% 
-  group_by(group) %>% 
-  filter(Ri == 1) %>% 
-  summarise(mean(pseudoval,na.rm = T
-                 ))
-
-# dat = read.csv("sad_dat.csv") %>% 
-  # relocate(Sadness_t_score_BL, .after = Sadness_t_score)
-
-write.csv(final.dat, file = "sad_dat_thresh0.csv")
