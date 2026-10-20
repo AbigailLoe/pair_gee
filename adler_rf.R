@@ -61,6 +61,7 @@ calibrated.forest <- function(n.iter = 500,
     n.unique = length(unique(bagged))
     bagged.df <- data.table(ID = bagged)[, .N, by = ID]
     
+    # we want to sample only one time point per id
     single_time_point_per_id <- data[ID %in% bagged.df$ID,
                                      .SD[sample(.N, 1)], by = "ID"]
     
@@ -86,7 +87,7 @@ calibrated.forest <- function(n.iter = 500,
     # Sample covariates
     cov.samp <- c(sample(c(names(cov.mat), "continuous_time"), size = nsamp))
     if(!is.null(always.split)) {
-      cov.samp <- unique(c(cov.samp, sample(always.split, 5)))
+      cov.samp <- unique(c(cov.samp, always.split))
     }
     
     form <- as.formula(paste0("Ri ~ ", paste(cov.samp, collapse = "+")))
